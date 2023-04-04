@@ -27,6 +27,7 @@ void Backend::Stop() {
     backend_thread_.join();
 }
 
+
 void Backend::BackendLoop() {
     while (backend_running_.load()) {
         std::unique_lock<std::mutex> lock(data_mutex_);

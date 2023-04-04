@@ -11,6 +11,7 @@ namespace myslam {
 class Camera {
    public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+    
     typedef std::shared_ptr<Camera> Ptr;
 
     double fx_ = 0, fy_ = 0, cx_ = 0, cy_ = 0,
@@ -29,6 +30,7 @@ class Camera {
     SE3 pose() const { return pose_; }
 
     // return intrinsic matrix
+    // 相机内参
     Mat33 K() const {
         Mat33 k;
         k << fx_, 0, cx_, 0, fy_, cy_, 0, 0, 1;
@@ -36,6 +38,7 @@ class Camera {
     }
 
     // coordinate transform: world, camera, pixel
+    // 
     Vec3 world2camera(const Vec3 &p_w, const SE3 &T_c_w);
 
     Vec3 camera2world(const Vec3 &p_c, const SE3 &T_c_w);

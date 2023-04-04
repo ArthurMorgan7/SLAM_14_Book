@@ -27,14 +27,14 @@ bool Frontend::AddFrame(myslam::Frame::Ptr frame) {
 
     switch (status_) {
         case FrontendStatus::INITING:
-            StereoInit();
+            StereoInit();   // 初始化
             break;
         case FrontendStatus::TRACKING_GOOD:
         case FrontendStatus::TRACKING_BAD:
-            Track();
+            Track();    // 追踪
             break;
-        case FrontendStatus::LOST:
-            Reset();
+        case FrontendStatus::LOST:  
+            Reset();    // 重置
             break;
     }
 
@@ -42,13 +42,38 @@ bool Frontend::AddFrame(myslam::Frame::Ptr frame) {
     return true;
 }
 
+// 在初始化状态中，根据左右目之间的光流匹配，寻找可以三角化的地图点，成功时建立初始地图
+/*************************************************************************************************/
+bool Frontend::StereoInit() {
+    int num_features_left = DetectFeatures();
+    int num_coor_features = FindFeaturesInRight();
+    if (num_coor_features < num_features_init_) {
+        return false;
+    }
+
+    bool build_map_success = BuildInitMap();
+    if (build_map_success) {
+        status_ = FrontendStatus::TRACKING_GOOD;
+        if (viewer_) {
+            viewer_->AddCurrentFrame(current_frame_);
+            viewer_->UpdateMap();
+        }
+        return true;
+    }
+    return false;
+}
+
+
+// 追踪阶段中，前端计算上一帧的特征点到当前帧的光流，根据光流计算结果计算图像位姿。（只用到左目图像）
+/*******************************************************************************************************/
 bool Frontend::Track() {
     if (last_frame_) {
         current_frame_->SetPose(relative_motion_ * last_frame_->Pose());
     }
 
     int num_track_last = TrackLastFrame();
-    tracking_inliers_ = EstimateCurrentPose();
+    tracking_inliers_ = EstimateCurrentPose(); // 返回左相机非异常点的特征点个数
+
 
     if (tracking_inliers_ > num_features_tracking_) {
         // tracking good
@@ -61,39 +86,49 @@ bool Frontend::Track() {
         status_ = FrontendStatus::LOST;
     }
 
-    InsertKeyframe();
+
+    InsertKeyframe(); // 是否插入关键帧在函数里判断
+
+    // 得到相对运动
     relative_motion_ = current_frame_->Pose() * last_frame_->Pose().inverse();
 
     if (viewer_) viewer_->AddCurrentFrame(current_frame_);
     return true;
 }
 
+// 追踪阶段中，如果追踪到的点较少，就判定当前帧为关键帧，需要额外操作
+//      a. 提取新的特征点
+//      b. 找到这些点在右图的对应点，用三角化建立新的路标点
+//      c. 将新的关键点和路标点加入到地图，并触发一次后端优化
 bool Frontend::InsertKeyframe() {
     if (tracking_inliers_ >= num_features_needed_for_keyframe_) {
         // still have enough features, don't insert keyframe
         return false;
     }
-    // current frame is a new keyframe
-    current_frame_->SetKeyFrame();
-    map_->InsertKeyFrame(current_frame_);
-
+    
+    // 判定为关键帧
+    current_frame_->SetKeyFrame();  
+    map_->InsertKeyFrame(current_frame_);   // 
     LOG(INFO) << "Set frame " << current_frame_->id_ << " as keyframe "
               << current_frame_->keyframe_id_;
+
 
     SetObservationsForKeyFrame();
     DetectFeatures();  // detect new features
 
-    // track in right image
+    // track in right image 找到这些点在右图的对应点
     FindFeaturesInRight();
-    // triangulate map points
+    // triangulate map points 用三角化建立新的路标点
     TriangulateNewPoints();
-    // update backend because we have a new keyframe
+    // update backend because we have a new keyframe 将新的关键帧和路标点加入地图，并触发一次后端优化
     backend_->UpdateMap();
 
     if (viewer_) viewer_->UpdateMap();
 
     return true;
 }
+
+
 
 void Frontend::SetObservationsForKeyFrame() {
     for (auto &feat : current_frame_->features_left_) {
@@ -156,7 +191,7 @@ int Frontend::EstimateCurrentPose() {
     vertex_pose->setEstimate(current_frame_->Pose());
     optimizer.addVertex(vertex_pose);
 
-    // K
+    // K 左边相机内参
     Mat33 K = camera_left_->K();
 
     // edges
@@ -269,24 +304,7 @@ int Frontend::TrackLastFrame() {
     return num_good_pts;
 }
 
-bool Frontend::StereoInit() {
-    int num_features_left = DetectFeatures();
-    int num_coor_features = FindFeaturesInRight();
-    if (num_coor_features < num_features_init_) {
-        return false;
-    }
 
-    bool build_map_success = BuildInitMap();
-    if (build_map_success) {
-        status_ = FrontendStatus::TRACKING_GOOD;
-        if (viewer_) {
-            viewer_->AddCurrentFrame(current_frame_);
-            viewer_->UpdateMap();
-        }
-        return true;
-    }
-    return false;
-}
 
 int Frontend::DetectFeatures() {
     cv::Mat mask(current_frame_->left_img_.size(), CV_8UC1, 255);
@@ -386,6 +404,9 @@ bool Frontend::BuildInitMap() {
     return true;
 }
 
+
+// 如果追踪丢失，就重置前端系统，重新初始化
+/*******************************************************************************************************/
 bool Frontend::Reset() {
     LOG(INFO) << "Reset is not implemented. ";
     return true;
